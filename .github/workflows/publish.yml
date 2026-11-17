@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, official tag resolved during preparation
         with:
           ref: ${{ github.sha }}
-          path: publisher
+          path: trusted
           persist-credentials: false
       - name: Checkout immutable candidate as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, official tag resolved during preparation
@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 publisher/release-tools/check_candidate.py --checkout candidate --sha "$CANDIDATE_SHA"
+          python3 trusted/publisher/release-tools/check_candidate.py --checkout candidate --sha "$CANDIDATE_SHA"
           AAPT=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name aapt2 -type f | sort -V | tail -1)
           SIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)
           test -x "$AAPT"
@@ -77,10 +77,10 @@ jobs:
           set -euo pipefail
           FIRST=()
           if [ "$ALLOW_FIRST" = true ]; then FIRST+=(--allow-first-release); fi
-          python3 publisher/release-tools/previous_release.py --output "$RUNNER_TEMP/previous.json" "${FIRST[@]}"
+          python3 trusted/publisher/release-tools/previous_release.py --output "$RUNNER_TEMP/previous.json" "${FIRST[@]}"
           PREVIOUS=()
           if [ -f "$RUNNER_TEMP/previous.json" ]; then PREVIOUS+=(--previous "$RUNNER_TEMP/previous.json"); fi
-          python3 publisher/release-tools/verify_bundle.py --bundle "$RUNNER_TEMP/bundle" --product solmi \
+          python3 trusted/publisher/release-tools/verify_bundle.py --bundle "$RUNNER_TEMP/bundle" --product solmi \
             --aapt "$AAPT" --apksigner "$SIGNER" "${PREVIOUS[@]}" --output "$RUNNER_TEMP/verified-plan.json"
       - name: Publish using the real Actions bot and verify uploaded files
         if: inputs.publish == true
@@ -91,5 +91,5 @@ jobs:
           set -euo pipefail
           PREVIOUS=()
           if [ -f "$RUNNER_TEMP/previous.json" ]; then PREVIOUS+=(--previous "$RUNNER_TEMP/previous.json"); fi
-          python3 publisher/release-tools/publish_release.py --bundle "$RUNNER_TEMP/bundle" --candidate "$CANDIDATE_SHA" \
+          python3 trusted/publisher/release-tools/publish_release.py --bundle "$RUNNER_TEMP/bundle" --candidate "$CANDIDATE_SHA" \
             --aapt "$AAPT" --apksigner "$SIGNER" "${PREVIOUS[@]}"
