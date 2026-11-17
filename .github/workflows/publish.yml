@@ -1,0 +1,95 @@
+name: Publish verified Solmi update
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Commit SHA containing only app-release.apk and update-manifest.json
+        required: true
+        type: string
+      publish:
+        description: Publish after validation (false performs validation only)
+        required: true
+        default: false
+        type: boolean
+      allow_first_release:
+        description: Permit missing previous release only for the first organization release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solmi-release-publication
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'SolmiApp/solmi-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      PUBLISH: ${{ inputs.publish }}
+      ALLOW_FIRST: ${{ inputs.allow_first_release }}
+    steps:
+      - name: Check immutable candidate input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Checkout trusted publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, official tag resolved during preparation
+        with:
+          ref: ${{ github.sha }}
+          path: publisher
+          persist-credentials: false
+      - name: Checkout immutable candidate as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, official tag resolved during preparation
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /app-release.apk
+            /update-manifest.json
+      - name: Validate exact candidate tree and locate Android tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 publisher/release-tools/check_candidate.py --checkout candidate --sha "$CANDIDATE_SHA"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name aapt2 -type f | sort -V | tail -1)
+          SIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)
+          test -x "$AAPT"
+          test -x "$SIGNER"
+          echo "AAPT=$AAPT" >> "$GITHUB_ENV"
+          echo "SIGNER=$SIGNER" >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/bundle"
+          cp candidate/app-release.apk candidate/update-manifest.json "$RUNNER_TEMP/bundle/"
+      - name: Verify previous version, signature and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          FIRST=()
+          if [ "$ALLOW_FIRST" = true ]; then FIRST+=(--allow-first-release); fi
+          python3 publisher/release-tools/previous_release.py --output "$RUNNER_TEMP/previous.json" "${FIRST[@]}"
+          PREVIOUS=()
+          if [ -f "$RUNNER_TEMP/previous.json" ]; then PREVIOUS+=(--previous "$RUNNER_TEMP/previous.json"); fi
+          python3 publisher/release-tools/verify_bundle.py --bundle "$RUNNER_TEMP/bundle" --product solmi \
+            --aapt "$AAPT" --apksigner "$SIGNER" "${PREVIOUS[@]}" --output "$RUNNER_TEMP/verified-plan.json"
+      - name: Publish using the real Actions bot and verify uploaded files
+        if: inputs.publish == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREVIOUS=()
+          if [ -f "$RUNNER_TEMP/previous.json" ]; then PREVIOUS+=(--previous "$RUNNER_TEMP/previous.json"); fi
+          python3 publisher/release-tools/publish_release.py --bundle "$RUNNER_TEMP/bundle" --candidate "$CANDIDATE_SHA" \
+            --aapt "$AAPT" --apksigner "$SIGNER" "${PREVIOUS[@]}"
